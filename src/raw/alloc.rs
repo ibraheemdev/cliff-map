@@ -85,6 +85,12 @@ impl<T> Table<T> {
                 .cast::<u8>()
                 .write_bytes(super::meta::EMPTY, capacity);
 
+            // initialize the meta table
+            ptr.add(mem::size_of::<TableLayout>())
+                .add(mem::size_of::<u8>() * capacity)
+                .cast::<usize>()
+                .write_bytes(0, capacity);
+
             Table {
                 len,
                 capacity,

@@ -45,6 +45,7 @@ pub struct Tagged<T> {
 
 pub trait AtomicPtrFetchOps<T> {
     fn fetch_or(&self, value: usize, ordering: Ordering) -> *mut T;
+    fn fetch_and(&self, value: usize, ordering: Ordering) -> *mut T;
 }
 
 impl<T> AtomicPtrFetchOps<T> for AtomicPtr<T> {
@@ -53,7 +54,6 @@ impl<T> AtomicPtrFetchOps<T> for AtomicPtr<T> {
         {
             use std::sync::atomic::AtomicUsize;
 
-            // mark the entry as copied
             unsafe { &*(self as *const AtomicPtr<T> as *const AtomicUsize) }
                 .fetch_or(value, ordering) as *mut T
         }
@@ -62,6 +62,24 @@ impl<T> AtomicPtrFetchOps<T> for AtomicPtr<T> {
         {
             self.fetch_update(ordering, Ordering::Acquire, |ptr| {
                 Some(ptr.map_addr(|addr| addr | value))
+            })
+            .unwrap()
+        }
+    }
+
+    fn fetch_and(&self, value: usize, ordering: Ordering) -> *mut T {
+        #[cfg(not(miri))]
+        {
+            use std::sync::atomic::AtomicUsize;
+
+            unsafe { &*(self as *const AtomicPtr<T> as *const AtomicUsize) }
+                .fetch_and(value, ordering) as *mut T
+        }
+
+        #[cfg(miri)]
+        {
+            self.fetch_update(ordering, Ordering::Acquire, |ptr| {
+                Some(ptr.map_addr(|addr| addr & value))
             })
             .unwrap()
         }

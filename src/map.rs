@@ -13,7 +13,7 @@ use std::marker::PhantomData;
 /// [`HashMap::guard`] or using the [`HashMap::pin`] API. See the [crate-level documentation](crate)
 /// for details.
 pub struct HashMap<K, V, S = RandomState> {
-    raw: raw::HashMap<K, V, S>,
+    pub raw: raw::HashMap<K, V, S>,
 }
 
 unsafe impl<K, V, S: Send> Send for HashMap<K, V, S> {}
@@ -425,7 +425,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.raw.root(guard).get_entry(key, guard).map(|(_, v)| v)
+        self.raw.root(guard).get(key, guard).map(|(_, v)| v)
     }
 
     /// Returns the key-value pair corresponding to the supplied key.
@@ -454,7 +454,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.raw.root(guard).get_entry(key, guard)
+        self.raw.root(guard).get(key, guard)
     }
 
     /// Inserts a key-value pair into the map.
@@ -487,9 +487,9 @@ where
     #[inline]
     pub fn insert<'g>(&'g self, key: K, value: V, guard: &'g impl Guard) -> Option<&'g V> {
         match self.raw.root(guard).insert(key, value, true, guard) {
-            EntryStatus::Empty(_) => None,
+            EntryStatus::Empty(..) => None,
             EntryStatus::Replaced(value) => Some(value),
-            EntryStatus::Error { .. } => unreachable!(),
+            EntryStatus::RawError { .. } | EntryStatus::Error { .. } => unreachable!(),
         }
     }
 
@@ -522,7 +522,7 @@ where
         guard: &'g impl Guard,
     ) -> Result<&'g V, OccupiedError<'g, V>> {
         match self.raw.root(guard).insert(key, value, false, guard) {
-            EntryStatus::Empty(value) => Ok(value),
+            EntryStatus::Empty(_, value) => Ok(value),
             EntryStatus::Error {
                 current,
                 not_inserted,
@@ -530,7 +530,7 @@ where
                 current,
                 not_inserted,
             }),
-            EntryStatus::Replaced(_) => unreachable!(),
+            EntryStatus::Replaced(_) | EntryStatus::RawError { .. } => unreachable!(),
         }
     }
 

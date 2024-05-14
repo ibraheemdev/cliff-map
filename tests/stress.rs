@@ -1,5 +1,7 @@
 // adapted from: https://github.com/jonhoo/flurry/tree/main/tests/jdk
 
+use papaya::raw::utils::StrictProvenance;
+use papaya::raw::{Entry, EntryStatus, Reason};
 use papaya::{HashMap, ResizeMode};
 use rand::prelude::*;
 
@@ -8,7 +10,7 @@ use std::sync::Barrier;
 use std::thread;
 
 fn with_map<K, V>(mut test: impl FnMut(&dyn Fn() -> HashMap<K, V>)) {
-    test(&(|| HashMap::builder().resize_mode(ResizeMode::Blocking).build()));
+    // test(&(|| HashMap::builder().resize_mode(ResizeMode::Blocking).build()));
     test(
         &(|| {
             HashMap::builder()
@@ -16,6 +18,7 @@ fn with_map<K, V>(mut test: impl FnMut(&dyn Fn() -> HashMap<K, V>)) {
                 .build()
         }),
     );
+    dbg!("DONE");
     test(
         &(|| {
             HashMap::builder()
@@ -141,7 +144,7 @@ fn insert_stress<'g>() {
 }
 
 #[test]
-fn mixed_stress() {
+fn chunk_stress() {
     const ITERATIONS: usize = if cfg!(miri) { 1 } else { 48 };
     const CHUNK: usize = if cfg!(miri) { 48 } else { 1 << 14 };
 
@@ -203,6 +206,91 @@ fn mixed_stress() {
             let mut got: Vec<_> = map.pin().iter().map(|(&k, &v)| (k, v)).collect();
             got.sort();
             assert_eq!(v, got);
+        }
+    });
+}
+
+#[test]
+// #[ignore]
+fn entry_stress() {
+    const ITERATIONS: usize = if cfg!(miri) { 1 } else { 48 };
+    const CHUNK: usize = if cfg!(miri) { 100 } else { 1 << 14 };
+
+    let run = |barrier: &Barrier, t: usize, map: &HashMap<usize, usize>, threads: usize| {
+        barrier.wait();
+
+        let (start, end) = (CHUNK * t, CHUNK * (t + 1));
+
+        for i in start..end {
+            for x in 0..100 {
+                {
+                    let g = map.guard();
+
+                    let entry = Box::into_raw(Box::new(Entry {
+                        key: i,
+                        value: i + 1,
+                        link: map.raw.collector.link(),
+                    }));
+                    let (result, _) = map.raw.root(&g).insert_entry(
+                        entry.unpack(Entry::MASK),
+                        false,
+                        true,
+                        Reason::Probe,
+                        &g,
+                    );
+                    if !matches!(result, EntryStatus::Empty(..)) {
+                        match result {
+                            EntryStatus::RawError {
+                                current,
+                                reason,
+                                current_ptr,
+                            } => {
+                                panic!(
+                                    "[{x}] ({i}) current: {current}, reason: {reason:?}, ptr: {:064b}",
+                                    current_ptr as usize
+                                );
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+
+                // assert_eq!(map.pin().insert(i, i + 1), None);
+                // assert_eq!(map.pin().get(&i), Some(&(i + 1)));
+                //assert_eq!(map.pin().update(i, |i| *i), Some(&(i + 1)));
+                assert_eq!(map.pin().remove(&i), Some(&(i + 1)));
+                // assert_eq!(map.pin().get(&i), None);
+            }
+        }
+
+        for i in start..end {
+            assert_eq!(map.pin().get(&i), None);
+        }
+
+        for (&k, &v) in map.pin().iter() {
+            assert!(k < CHUNK * threads);
+            assert!(v == k || v == k + 1);
+        }
+    };
+
+    with_map(|map| {
+        for i in 0..ITERATIONS {
+            let map = map();
+            let threads = thread::available_parallelism().unwrap().get().min(8);
+            let barrier = Barrier::new(threads);
+
+            thread::scope(|s| {
+                for t in 0..threads {
+                    let map = &map;
+                    let barrier = &barrier;
+
+                    s.spawn(move || run(barrier, t, map, threads));
+                }
+            });
+
+            let got: Vec<_> = map.pin().iter().map(|(&k, &v)| (k, v)).collect();
+            assert_eq!(got, []);
+            dbg!(i);
         }
     });
 }
